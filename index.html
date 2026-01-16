@@ -8,7 +8,6 @@
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#007aff">
-
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -78,6 +77,27 @@ button.secondary { background: #5856d6; }
 button.offline   { background: #ff9500; }
 button.clear     { background: #8e8e93; }
 
+/* Сворачиваемый калькулятор */
+.toggle {
+  margin-top: 24px;
+  padding: 12px 14px;
+  background: #f2f2f7;
+  border-radius: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+
+.toggle span {
+  font-size: 13px;
+  color: #666;
+}
+
+.calc-box {
+  display: none;
+  margin-top: 12px;
+}
+
 .result {
   margin-top: 20px;
   padding: 16px;
@@ -103,8 +123,9 @@ button.clear     { background: #8e8e93; }
 <div class="container">
   <h1>FX калькулятор</h1>
 
+  <!-- FX -->
   <label>Сумма</label>
-  <input id="amount" inputmode="decimal" placeholder="1000">
+  <input id="amount" placeholder="1000">
 
   <label>Из</label>
   <select id="from">
@@ -123,7 +144,7 @@ button.clear     { background: #8e8e93; }
     <option value="UAH">UAH</option>
     <option value="OTHER">Другая...</option>
   </select>
-  <input id="fromOther" class="hidden" placeholder="Код валюты (3 буквы)">
+  <input id="fromOther" class="hidden" placeholder="Код валюты">
 
   <label>В</label>
   <select id="to">
@@ -142,7 +163,7 @@ button.clear     { background: #8e8e93; }
     <option value="UAH">UAH</option>
     <option value="OTHER">Другая...</option>
   </select>
-  <input id="toOther" class="hidden" placeholder="Код валюты (3 буквы)">
+  <input id="toOther" class="hidden" placeholder="Код валюты">
 
   <div class="row">
     <button class="secondary" onclick="swap()">↔ Поменять</button>
@@ -150,11 +171,27 @@ button.clear     { background: #8e8e93; }
     <button class="clear" onclick="clearAll()">Очистить</button>
   </div>
 
-  <label>Ручной курс (1 FROM → TO)</label>
-  <input id="manualRate" inputmode="decimal" placeholder="например 24567.89">
+  <label>Ручной курс</label>
+  <input id="manualRate" placeholder="например 24567.89">
 
   <div class="result" id="output">—</div>
   <div class="meta" id="meta">Курсы не загружены</div>
+
+  <!-- КАЛЬКУЛЯТОР ВНИЗУ -->
+  <div class="toggle" onclick="toggleCalc()">
+    Калькулятор <span id="calcArrow">▼</span>
+  </div>
+
+  <div class="calc-box" id="calcBox">
+    <label>Выражение</label>
+    <input id="calcInput" placeholder="(100+250)*3">
+
+    <div class="row">
+      <button class="secondary" onclick="calcEval()">Посчитать</button>
+      <button class="offline" onclick="applyCalc()">В FX</button>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -162,26 +199,60 @@ const API_KEY = "881800ddc11637e100f88122";
 const API = `https://v6.exchangerate-api.com/v6/${API_KEY}/latest/USD`;
 
 const els = {
-  amount: document.getElementById("amount"),
-  from: document.getElementById("from"),
-  to: document.getElementById("to"),
-  fromOther: document.getElementById("fromOther"),
-  toOther: document.getElementById("toOther"),
-  manual: document.getElementById("manualRate"),
-  output: document.getElementById("output"),
-  meta: document.getElementById("meta"),
-  modeBtn: document.getElementById("modeBtn")
+  amount,
+  from,
+  to,
+  fromOther,
+  toOther,
+  manual: manualRate,
+  output,
+  meta,
+  modeBtn,
+  calcInput,
+  calcBox,
+  calcArrow
 };
 
 let rates = JSON.parse(localStorage.rates || "{}");
-let state = JSON.parse(localStorage.fxState || "{}");
-let offline = state.offline ?? true;
+let offline = true;
+let calcResult = null;
 
+/* ===== КАЛЬКУЛЯТОР ===== */
+function toggleCalc() {
+  const open = els.calcBox.style.display === "block";
+  els.calcBox.style.display = open ? "none" : "block";
+  els.calcArrow.textContent = open ? "▼" : "▲";
+}
+
+function calcEval() {
+  try {
+    const expr = els.calcInput.value
+      .replace(',', '.')
+      .replace(/[^0-9+\-*/().]/g, '');
+
+    if (!expr) return;
+
+    const res = Function(`"use strict";return (${expr})`)();
+    if (!isFinite(res)) throw 1;
+
+    calcResult = Number(res.toFixed(4));
+    els.calcInput.value = calcResult;
+  } catch {
+    els.calcInput.value = "Ошибка";
+  }
+}
+
+function applyCalc() {
+  if (calcResult === null) return;
+  els.amount.value = calcResult;
+  calculate();
+}
+
+/* ===== FX ===== */
 function real(sel, other) {
   if (sel.value !== "OTHER") return sel.value;
-  const code = (other.value || "").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code)) return null;
-  return code;
+  const c = other.value.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(c) ? c : null;
 }
 
 function toggleOther() {
@@ -189,86 +260,49 @@ function toggleOther() {
   els.toOther.classList.toggle("hidden", els.to.value !== "OTHER");
 }
 
-function updateModeUI() {
-  els.modeBtn.textContent = offline ? "OFFLINE" : "ONLINE";
-  els.modeBtn.className = offline ? "offline" : "secondary";
-}
-
 function toggleMode() {
   offline = !offline;
-  updateModeUI();
-  saveState();
+  els.modeBtn.textContent = offline ? "OFFLINE" : "ONLINE";
   if (!offline) loadRates(true);
   calculate();
 }
 
-function saveState() {
-  localStorage.fxState = JSON.stringify({
-    amount: els.amount.value,
-    from: els.from.value,
-    to: els.to.value,
-    fromOther: els.fromOther.value,
-    toOther: els.toOther.value,
-    manualRate: els.manual.value,
-    offline
-  });
-}
-
-async function loadRates(force = false) {
+async function loadRates(force=false) {
   if (offline && !force) return;
   try {
     const r = await fetch(API);
     const d = await r.json();
     rates = d.conversion_rates;
     localStorage.rates = JSON.stringify(rates);
-    localStorage.ratesTime = Date.now();
-    els.meta.textContent = "Курсы обновлены: " + new Date().toLocaleString("ru-RU");
+    els.meta.textContent = "Курсы обновлены";
   } catch {
-    els.meta.textContent = "Ошибка загрузки • используется кэш";
+    els.meta.textContent = "Ошибка загрузки • кэш";
   }
 }
 
 function calculate() {
-  saveState();
   toggleOther();
-
-  const amt = parseFloat(els.amount.value.replace(',', '.'));
-  if (!amt || amt <= 0) {
-    els.output.textContent = "Введите сумму";
-    return;
-  }
+  const amt = parseFloat(els.amount.value);
+  if (!amt) { els.output.textContent="Введите сумму"; return; }
 
   const f = real(els.from, els.fromOther);
   const t = real(els.to, els.toOther);
-  if (!f || !t) {
-    els.output.textContent = "Некорректный код валюты";
-    return;
-  }
+  if (!f || !t) { els.output.textContent="Ошибка валюты"; return; }
 
-  let rate = null;
-  if (els.manual.value) {
-    rate = parseFloat(els.manual.value.replace(',', '.'));
-  } else if (rates[f] && rates[t]) {
-    rate = rates[t] / rates[f];
-  }
+  const rate = els.manual.value
+    ? parseFloat(els.manual.value)
+    : rates[f] && rates[t] ? rates[t]/rates[f] : null;
 
-  if (!rate) {
-    els.output.textContent = "Нет курса для пары";
-    return;
-  }
+  if (!rate) { els.output.textContent="Нет курса"; return; }
 
-  const res = amt * rate;
   els.output.textContent =
 `${amt} ${f}
 ↓
-${res.toFixed(2)} ${t}
-
-1 ${f} ≈ ${rate.toFixed(6)} ${t}`;
+${(amt*rate).toFixed(2)} ${t}`;
 }
 
 function swap() {
   [els.from.value, els.to.value] = [els.to.value, els.from.value];
-  [els.fromOther.value, els.toOther.value] = [els.toOther.value, els.fromOther.value];
   calculate();
 }
 
@@ -276,38 +310,18 @@ function clearAll() {
   els.amount.value = "";
   els.manual.value = "";
   els.output.textContent = "—";
-  saveState();
 }
 
 ["input","change"].forEach(e =>
   document.addEventListener(e, ev => {
-    if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") {
-      calculate();
-    }
+    if (["INPUT","SELECT"].includes(ev.target.tagName)) calculate();
   })
 );
-
-function init() {
-  if (state.amount) els.amount.value = state.amount;
-  if (state.from) els.from.value = state.from;
-  if (state.to) els.to.value = state.to;
-  if (state.fromOther) els.fromOther.value = state.fromOther;
-  if (state.toOther) els.toOther.value = state.toOther;
-  if (state.manualRate) els.manual.value = state.manualRate;
-  updateModeUI();
-  if (!offline) loadRates(true);
-  calculate();
-}
-
-init();
 </script>
 
-<!-- Service Worker -->
 <script>
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js');
-  });
+  navigator.serviceWorker.register('./service-worker.js');
 }
 </script>
 
